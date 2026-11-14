@@ -407,29 +407,54 @@ async function send(){
   hist[city].push({role:'user', content: text});
   findCards(text).forEach(function(c){ addChip(c); });
 
-  if (!KEY){ bubble('ai', presetMatch(city, text) || '此事我不记得。你问得具体些——是问路、问厂，还是问兵？'); return; }
+  var preset = presetMatch(city, text);
+
+  // 没钥匙、或明确离线：直接给预设，不等网络
+  if (!KEY || navigator.onLine === false){
+    bubble('ai', preset || '此刻网路不通，我一时答不上。诸君可先看右边的卡片，或换个问法。');
+    hist[city].push({role:'assistant', content: preset || ''});
+    chatEl.scrollTop = chatEl.scrollHeight;
+    return;
+  }
 
   var w = bubble('ai', '……');
+  w.classList.add('wait');
+
+  // 最多等 8 秒，超时就当断网处理
+  var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 8000);
+
   try{
     var know = (CARDS[city] || []).map(function(c){
       return c.cat + '：' + (c.pts || []).join('；');
     }).join('\n');
     var sys = SYSTEM + "\n\n【你眼下谈的是" + CITIES[city].name + "，以下是你知道的事实】\n" + know;
     var msgs = [{role:'system', content: sys}].concat(hist[city].slice(-6));
-    var r = await fetch(API, {
+    var opt = {
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer ' + KEY},
       body: JSON.stringify({model: MODEL, messages: msgs, temperature: 0.45, max_tokens: 200})
-    });
+    };
+    if (ctrl) opt.signal = ctrl.signal;
+    var r = await fetch(API, opt);
+    clearTimeout(timer);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var d = await r.json();
     var reply = (d.choices && d.choices[0] && d.choices[0].message.content || '').trim();
+    w.classList.remove('wait');
     w.textContent = reply || '（他沉吟不语）';
     hist[city].push({role:'assistant', content: reply});
     findCards(reply).forEach(function(c){ addChip(c); });
   }catch(e){
-    if (preset){ w.textContent = preset; }
-    else { w.textContent = '此刻网路不通，我一时答不上。诸君可先看右边的卡片，或换个问法。'; }
+    clearTimeout(timer);
+    w.classList.remove('wait');
+    if (preset){
+      w.textContent = preset;
+      hist[city].push({role:'assistant', content: preset});
+      st.textContent = '预设答复'; st.className = 'st';
+    } else {
+      w.textContent = '此刻网路不通，我一时答不上。诸君可先看右边的卡片，或换个问法。';
+    }
   }
   chatEl.scrollTop = chatEl.scrollHeight;
 }
